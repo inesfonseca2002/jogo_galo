@@ -1,0 +1,6 @@
+{
+  "name": "Jogo do Galo",
+  "description": "Jogo do Galo clássico em React com tabuleiro 3x3 e suporte a modo de um ou dois jogadores.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
