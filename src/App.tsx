@@ -27,7 +27,9 @@ import {
   ListOrdered,
   Calendar,
   CheckCircle2,
-  ChevronRight
+  ChevronRight,
+  Copy,
+  Check
 } from 'lucide-react';
 import { Player, BoardCell, GameStats, GameMode, Difficulty, MoveLog } from './types';
 import { checkWinner, isBoardFull, getComputerMove } from './utils/gameLogic';
@@ -79,6 +81,39 @@ export default function App() {
 
   // Count player human moves
   const humanMovesPlayed = logs.filter(log => log.player === playerSymbol).length;
+
+  const [copiedLogs, setCopiedLogs] = useState<boolean>(false);
+
+  const handleCopyLogs = () => {
+    if (logs.length === 0) return;
+    
+    let summary = `📝 [JOGO DO GALO - RESUMO DAS JOGADAS]\n`;
+    summary += `Modo de Jogo: ${gameMode === 'pvc' ? `Computador (Dificuldade: ${difficulty === 'hard' ? 'Imbatível' : difficulty === 'medium' ? 'Médio' : 'Fácil'})` : 'Amigo (PvP)'}\n`;
+    summary += `Data/Hora: ${new Date().toLocaleString('pt-PT')}\n`;
+    summary += `-------------------------------------------\n`;
+    
+    logs.forEach((log) => {
+      summary += `Jogada #${log.moveNumber} | Jogador: ${log.player} | Casa: [${log.index}] (Linha ${log.row}, Coluna ${log.col}) | Hora: ${log.timestamp}\n`;
+    });
+    
+    summary += `-------------------------------------------\n`;
+    if (winner) {
+      summary += `🏆 Vencedor: Jogador "${winner}" !\n`;
+    } else if (isDraw) {
+      summary += `🤝 Resultado: Empate técnico!\n`;
+    } else {
+      summary += `🎮 Partida em curso | Próxima jogada: ${turn}\n`;
+    }
+    
+    navigator.clipboard.writeText(summary)
+      .then(() => {
+        setCopiedLogs(true);
+        setTimeout(() => setCopiedLogs(false), 2000);
+      })
+      .catch((err) => {
+        console.error('Falha ao copiar:', err);
+      });
+  };
 
   // Retrieve global scores on load
   const fetchScores = async () => {
@@ -425,31 +460,84 @@ export default function App() {
             )}
           </AnimatePresence>
 
-          {/* ACTIVE TURN & STATUS DISPLAY */}
-          <div className="w-full flex items-center justify-between px-2">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-slate-400">Vez de jogar:</span>
-              <div className="flex items-center gap-1.5">
-                <span className={`inline-flex items-center justify-center w-6 h-6 rounded-md font-black text-sm ${
-                  turn === 'X' 
-                    ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30' 
-                    : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
-                }`}>
-                  {turn}
-                </span>
-                <span className="text-xs font-mono text-slate-300">
-                  {gameMode === 'pvc' && turn === computerSymbol ? '(Computador a pensar...)' : '(É a tua vez!)'}
-                </span>
+          {/* ACTIVE TURN & STATUS DISPLAY / OUTCOME CARD */}
+          {winner || isDraw ? (
+            <div className={`w-full flex items-center justify-between gap-3 p-3 rounded-2xl border ${
+              winner 
+                ? (winner === 'X' ? 'bg-cyan-500/5 border-cyan-500/20 text-cyan-300' : 'bg-rose-500/5 border-rose-500/20 text-rose-300')
+                : 'bg-slate-900 border-slate-800 text-slate-300'
+            }`}>
+              <div className="flex items-center gap-2">
+                {winner ? (
+                  <>
+                    <Trophy className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <div className="flex items-center gap-1.5 text-xs text-slate-200">
+                      <span className="font-bold">Jogador</span>
+                      <span className={`inline-flex items-center justify-center w-5 h-5 rounded font-black text-xs ${
+                        winner === 'X' 
+                          ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30' 
+                          : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
+                      }`}>
+                        {winner}
+                      </span>
+                      <span className="font-semibold text-slate-400">Venceu! ({logs.length} jogadas)</span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <AlertCircle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                    <span className="text-xs font-bold text-slate-200">Empate Técnico! <span className="font-normal text-slate-400">({logs.length} jogadas)</span></span>
+                  </>
+                )}
               </div>
+              
+              <button
+                id="btn-copy-summary-outcome"
+                onClick={handleCopyLogs}
+                className={`flex items-center gap-1 text-[10px] uppercase font-mono tracking-wider font-semibold px-2 py-1 rounded-lg border transition-all cursor-pointer ${
+                  copiedLogs
+                    ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-400 shadow-sm'
+                    : 'bg-slate-950 border-slate-800 hover:bg-slate-900 text-slate-300 hover:text-white'
+                }`}
+                title="Copiar resumo de jogadas"
+              >
+                {copiedLogs ? (
+                  <>
+                    <Check className="w-3 h-3 text-emerald-400" /> Copiado!
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3 h-3" /> Copiar resumo
+                  </>
+                )}
+              </button>
             </div>
-
-            {gameMode === 'pvc' && (
-              <div className="text-xs text-slate-400 flex items-center gap-1 bg-slate-900 border border-slate-800 px-2 py-1 rounded-md font-mono">
-                <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-ping" />
-                Dificuldade: <span className="text-indigo-300 capitalize">{difficulty === 'hard' ? 'Imbatível' : difficulty === 'medium' ? 'Médio' : 'Fácil'}</span>
+          ) : (
+            <div className="w-full flex items-center justify-between px-2">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-slate-400">Vez de jogar:</span>
+                <div className="flex items-center gap-1.5">
+                  <span className={`inline-flex items-center justify-center w-6 h-6 rounded-md font-black text-sm ${
+                    turn === 'X' 
+                      ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30' 
+                      : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
+                  }`}>
+                    {turn}
+                  </span>
+                  <span className="text-xs font-mono text-slate-300">
+                    {gameMode === 'pvc' && turn === computerSymbol ? '(Computador a pensar...)' : '(É a tua vez!)'}
+                  </span>
+                </div>
               </div>
-            )}
-          </div>
+
+              {gameMode === 'pvc' && (
+                <div className="text-xs text-slate-400 flex items-center gap-1 bg-slate-900 border border-slate-800 px-2 py-1 rounded-md font-mono">
+                  <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-ping" />
+                  Dificuldade: <span className="text-indigo-300 capitalize">{difficulty === 'hard' ? 'Imbatível' : difficulty === 'medium' ? 'Médio' : 'Fácil'}</span>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* THE 3x3 GAME BOARD GRID */}
           <div className="relative w-full aspect-square max-w-[360px] bg-slate-900/50 p-4 rounded-3xl border border-slate-800/80 shadow-2xl grid-glow overflow-hidden">
@@ -918,9 +1006,33 @@ export default function App() {
                       <span className="flex items-center gap-1.5">
                         <Clock className="w-3.5 h-3.5 text-amber-400" /> 3. Registo de Eventos Ativos
                       </span>
-                      <span className="text-[10px] font-mono text-slate-500 font-normal">
-                        Total: {logs.length} moves
-                      </span>
+                      <div className="flex items-center gap-2">
+                        {logs.length > 0 && (
+                          <button
+                            id="btn-copy-history"
+                            onClick={handleCopyLogs}
+                            className={`flex items-center gap-1 text-[9px] uppercase font-mono tracking-wider font-semibold px-2 py-0.5 rounded-md border transition-all ${
+                              copiedLogs
+                                ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-400 shadow-sm'
+                                : 'bg-slate-950 border-slate-805 hover:bg-slate-900 text-slate-400 hover:text-slate-300'
+                            }`}
+                            title="Copiar resumo de jogadas"
+                          >
+                            {copiedLogs ? (
+                              <>
+                                <Check className="w-3 h-3 text-emerald-400" /> Copiado!
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3 h-3" /> Copiar resumo
+                              </>
+                            )}
+                          </button>
+                        )}
+                        <span className="text-[10px] font-mono text-slate-500 font-normal">
+                          Total: {logs.length} moves
+                        </span>
+                      </div>
                     </h4>
 
                     <div className="bg-slate-950 rounded-2xl border border-slate-800/60 h-44 overflow-y-auto custom-scrollbar p-1">
