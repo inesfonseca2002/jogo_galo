@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Trophy, 
@@ -20,11 +20,26 @@ import {
   Code,
   Flame,
   Award,
-  AlertCircle
+  AlertCircle,
+  Globe,
+  Send,
+  Loader2,
+  ListOrdered,
+  Calendar,
+  CheckCircle2,
+  ChevronRight
 } from 'lucide-react';
 import { Player, BoardCell, GameStats, GameMode, Difficulty, MoveLog } from './types';
-import { checkWinner, isBoardFull, getComputerMove, WINNING_LINES } from './utils/gameLogic';
+import { checkWinner, isBoardFull, getComputerMove } from './utils/gameLogic';
 import { playSound } from './utils/audio';
+
+interface ScoreEntry {
+  id: string;
+  playerName: string;
+  difficulty: "easy" | "medium" | "hard";
+  movesCount: number;
+  timestamp: string;
+}
 
 export default function App() {
   // Game state
@@ -40,8 +55,19 @@ export default function App() {
   
   // UI preferences
   const [audioEnabled, setAudioEnabled] = useState<boolean>(true);
-  const [showDataVisualizer, setShowDataVisualizer] = useState<boolean>(true);
   const [isComputerThinking, setIsComputerThinking] = useState<boolean>(false);
+
+  // Global scoreboard/database states
+  const [globalScores, setGlobalScores] = useState<ScoreEntry[]>([]);
+  const [loadingScores, setLoadingScores] = useState<boolean>(false);
+  const [playerNameInput, setPlayerNameInput] = useState<string>(() => {
+    return localStorage.getItem('playerName') || '';
+  });
+  const [hasSavedScore, setHasSavedScore] = useState<boolean>(false);
+  const [submittingScore, setSubmittingScore] = useState<boolean>(false);
+  const [scoreError, setScoreError] = useState<string | null>(null);
+  const [rightSidebarTab, setRightSidebarTab] = useState<'leaderboards' | 'visualizer'>('leaderboards');
+  const [leaderboardDiffTab, setLeaderboardDiffTab] = useState<Difficulty>('medium');
 
   // Check board status
   const winStatus = checkWinner(board);
@@ -50,6 +76,29 @@ export default function App() {
   const isDraw = !winner && isBoardFull(board);
 
   const computerSymbol: Player = playerSymbol === 'X' ? 'O' : 'X';
+
+  // Count player human moves
+  const humanMovesPlayed = logs.filter(log => log.player === playerSymbol).length;
+
+  // Retrieve global scores on load
+  const fetchScores = async () => {
+    setLoadingScores(true);
+    try {
+      const response = await fetch('/api/scores');
+      if (response.ok) {
+        const data = await response.json();
+        setGlobalScores(data);
+      }
+    } catch (error) {
+      console.error("Erro ao carregar classificações:", error);
+    } finally {
+      setLoadingScores(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchScores();
+  }, []);
 
   // Handle computer's move in PVC mode
   useEffect(() => {
@@ -94,7 +143,7 @@ export default function App() {
           }
         }
         setIsComputerThinking(false);
-      }, 700); // 700ms makes the AI look natural and strategic
+      }, 700);
       return () => clearTimeout(timer);
     }
   }, [board, gameMode, turn, playerSymbol, difficulty, winner, isDraw, computerSymbol, audioEnabled, logs.length]);
@@ -134,6 +183,8 @@ export default function App() {
         winsX: winCheck.winner === 'X' ? prev.winsX + 1 : prev.winsX,
         winsO: winCheck.winner === 'O' ? prev.winsO + 1 : prev.winsO,
       }));
+      // Auto-toggle tab to leaderboards so they see where to submit
+      setRightSidebarTab('leaderboards');
       if (audioEnabled) playSound('win');
     } else if (isBoardFull(nextBoard)) {
       setStats(prev => ({ ...prev, draws: prev.draws + 1 }));
@@ -144,12 +195,55 @@ export default function App() {
     }
   };
 
+  // Submit modern high score to our backend/database
+  const handleScoreSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!playerNameInput.trim()) {
+      setScoreError('Por favor introduza o seu nome');
+      return;
+    }
+
+    setSubmittingScore(true);
+    setScoreError(null);
+
+    try {
+      const response = await fetch('/api/scores', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          playerName: playerNameInput.trim(),
+          difficulty: difficulty,
+          movesCount: humanMovesPlayed
+        }),
+      });
+
+      if (response.ok) {
+        localStorage.setItem('playerName', playerNameInput.trim());
+        setHasSavedScore(true);
+        // Switch leaderboard diff sub-tab to current difficulty so they see it
+        setLeaderboardDiffTab(difficulty);
+        // Fetch new scores
+        await fetchScores();
+      } else {
+        const errData = await response.json();
+        setScoreError(errData.error || 'Erro ao comunicar com a base de dados');
+      }
+    } catch (err) {
+      setScoreError('Erro de ligação à rede');
+    } finally {
+      setSubmittingScore(false);
+    }
+  };
+
   // Reset current board round
   const handleResetRound = () => {
     setBoard(Array(9).fill(null));
     setLogs([]);
     setIsComputerThinking(false);
-    // Winner restarts next rounds or X starts by default
+    setHasSavedScore(false);
+    setScoreError(null);
     setTurn('X');
     if (audioEnabled) playSound('reset');
   };
@@ -160,6 +254,8 @@ export default function App() {
     setLogs([]);
     setStats({ winsX: 0, winsO: 0, draws: 0 });
     setIsComputerThinking(false);
+    setHasSavedScore(false);
+    setScoreError(null);
     setTurn('X');
     if (audioEnabled) playSound('reset');
   };
@@ -171,19 +267,33 @@ export default function App() {
     setTurn('X'); // X always makes the first move
   };
 
+  // Group or filter top scores per difficulty
+  const getLeaderboardData = (diff: Difficulty) => {
+    return globalScores
+      .filter(item => item.difficulty === diff)
+      // Sort primarily by fewest moves (efficiency), and secondarily by newest entry
+      .sort((a, b) => {
+        if (a.movesCount !== b.movesCount) {
+          return a.movesCount - b.movesCount;
+        }
+        return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+      })
+      .slice(0, 10); // Display Top 10
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between py-6 px-4 md:px-8 selection:bg-emerald-500 selection:text-slate-950 font-sans">
       
       {/* HEADER SECTION */}
       <header className="max-w-6xl mx-auto w-full text-center mb-4">
         <div className="inline-flex items-center gap-2 bg-slate-900 border border-slate-800 px-4 py-1.5 rounded-full text-xs font-mono tracking-wider text-emerald-400 uppercase mb-3">
-          <Sparkles className="w-3.5 h-3.5 animate-pulse" /> Jogo do Galo Clássico 3x3
+          <Sparkles className="w-3.5 h-3.5 animate-pulse" /> Jogo do Galo Clássivo com Base de Dados Pública
         </div>
         <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-emerald-400 via-teal-200 to-blue-400">
           Jogo do Galo
         </h1>
         <p className="text-slate-400 text-sm md:text-base mt-2 max-w-lg mx-auto">
-          Um tabuleiro 3x3 moderno com visualização em tempo real da estrutura de dados armazenada em memória.
+          Regista os teus recordes na base de dados global e compete contra jogadores de todo o mundo em 3 dificuldades!
         </p>
       </header>
 
@@ -207,7 +317,7 @@ export default function App() {
                 className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs md:text-sm font-medium transition-all ${
                   gameMode === 'pvc' 
                     ? 'bg-emerald-500 text-slate-950 shadow-md font-semibold' 
-                    : 'text-slate-400 hover:text-slate-200'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
                 }`}
               >
                 <Cpu className="w-3.5 h-3.5" /> Computador
@@ -221,14 +331,14 @@ export default function App() {
                 className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs md:text-sm font-medium transition-all ${
                   gameMode === 'pvp' 
                     ? 'bg-emerald-500 text-slate-950 shadow-md font-semibold' 
-                    : 'text-slate-400 hover:text-slate-200'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
                 }`}
               >
                 <Users className="w-3.5 h-3.5" /> Amigo (PvP)
               </button>
             </div>
 
-            {/* Quick volume & visualizer toggles */}
+            {/* Quick volume */}
             <div className="flex items-center gap-2">
               <button
                 id="btn-audio-toggle"
@@ -244,15 +354,13 @@ export default function App() {
               </button>
 
               <button
-                id="btn-visualizer-toggle"
-                onClick={() => setShowDataVisualizer(!showDataVisualizer)}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-mono transition-all ${
-                  showDataVisualizer 
-                    ? 'bg-emerald-950/40 border-emerald-800 text-emerald-400' 
-                    : 'bg-slate-950 border-slate-900 text-slate-500 hover:text-slate-400'
-                }`}
+                id="btn-reload-scores"
+                onClick={fetchScores}
+                disabled={loadingScores}
+                className="p-2 rounded-xl border border-slate-800 bg-slate-950 hover:bg-slate-900 text-slate-400 hover:text-slate-200 transition-all disabled:opacity-50"
+                title="Atualizar Classificações"
               >
-                <Database className="w-3.5 h-3.5" /> {showDataVisualizer ? "Ocultar Estrutura" : "Ver Estrutura"}
+                <Globe className={`w-4 h-4 ${loadingScores ? 'animate-spin text-emerald-400' : ''}`} />
               </button>
             </div>
           </div>
@@ -274,7 +382,10 @@ export default function App() {
                       <button
                         key={diff}
                         id={`btn-diff-${diff}`}
-                        onClick={() => setDifficulty(diff)}
+                        onClick={() => {
+                          setDifficulty(diff);
+                          handleResetRound();
+                        }}
                         className={`py-1 rounded-lg text-xs font-medium capitalize transition-all ${
                           difficulty === diff
                             ? 'bg-slate-800 text-emerald-400 font-bold border border-emerald-800/30 shadow-sm'
@@ -357,14 +468,14 @@ export default function App() {
                     key={idx}
                     id={`cell-${idx}`}
                     onClick={() => handleCellClick(idx)}
-                    className={`relative rounded-2xl flex items-center justify-center transition-all duration-200 outline-none select-none group ${
+                    className={`relative rounded-2xl flex items-center justify-center transition-all duration-200 outline-none select-none group h-full w-full ${
                       isWinningCell 
                         ? 'bg-gradient-to-br from-emerald-500 to-teal-600 border-emerald-400 text-slate-950 scale-[1.03] shadow-lg shadow-emerald-500/20 z-10' 
                         : 'bg-slate-950 hover:bg-slate-900 border border-slate-800/80 focus:border-slate-700'
                     }`}
                   >
                     {/* Visual Coordinate helper displayed super subtly in a corner */}
-                    <span className={`absolute top-1.5 left-2 text-[8px] font-mono select-none ${isWinningCell ? 'text-emerald-900 font-semibold' : 'text-slate-600'}`}>
+                    <span className={`absolute top-1.5 left-2 text-[8px] font-mono select-none ${isWinningCell ? 'text-emerald-950 font-semibold' : 'text-slate-600'}`}>
                       {Math.floor(idx / 3) + 1},{ (idx % 3) + 1 }
                     </span>
 
@@ -417,7 +528,7 @@ export default function App() {
             <button
               id="btn-limpar-tudo"
               onClick={handleZerarScores}
-              className="flex items-center justify-center gap-2 px-5 py-3 border border-red-950/40 bg-red-950/15 text-red-400 hover:bg-red-950/30 rounded-2xl text-xs font-semibold tracking-wider uppercase transition-all shadow-md cursor-pointer"
+              className="flex items-center justify-center gap-2 px-5 py-3 border border-red-950/40 bg-red-950/15 text-red-400 hover:bg-red-950/30 rounded-2xl text-xs font-semibold tracking-wider uppercase transition-all shadow-md cursor-pointer pointer-events-auto"
             >
               <Trash2 className="w-3.5 h-3.5" /> Zerar Placar
             </button>
@@ -426,7 +537,7 @@ export default function App() {
           {/* SCOREBOARD DISPLAY CARD */}
           <div className="w-full max-w-[360px] bg-slate-900/30 border border-slate-900 rounded-3xl p-4 mt-1">
             <h3 className="text-center text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-3 flex items-center justify-center gap-1.5">
-              <Trophy className="w-3 h-3 text-amber-500" /> Placar Geral
+              <Trophy className="w-3 h-3 text-amber-500" /> Placar da Sessão Local
             </h3>
             <div className="grid grid-cols-3 gap-2 text-center">
               
@@ -456,31 +567,268 @@ export default function App() {
 
         </div>
 
-        {/* RIGHT COLUMN: REAL-TIME DATA STRUCTURE VISUALIZER */}
-        <div className="lg:col-span-5 space-y-6">
+        {/* RIGHT COLUMN: TABS SIDEBAR WITH DATABASE LEADERBOARD & VISUALIZATION */}
+        <div className="lg:col-span-5 space-y-4 w-full">
           
-          <AnimatePresence>
-            {showDataVisualizer && (
+          {/* TAB SELECTOR */}
+          <div className="bg-slate-900 p-1 rounded-2xl border border-slate-800 flex w-full">
+            <button
+              id="btn-tab-leaderboards"
+              onClick={() => setRightSidebarTab('leaderboards')}
+              className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold tracking-wide uppercase transition-all ${
+                rightSidebarTab === 'leaderboards'
+                  ? 'bg-slate-950 text-emerald-400 border border-slate-800 shadow-lg'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Globe className="w-3.5 h-3.5" /> Classificação Global (Web)
+            </button>
+            <button
+              id="btn-tab-visualizer"
+              onClick={() => setRightSidebarTab('visualizer')}
+              className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold tracking-wide uppercase transition-all ${
+                rightSidebarTab === 'visualizer'
+                  ? 'bg-slate-950 text-cyan-400 border border-slate-800 shadow-lg'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Database className="w-3.5 h-3.5" /> Estrutura de Dados
+            </button>
+          </div>
+
+          <AnimatePresence mode="wait">
+            
+            {/* 1. PUBLIC WEB LEADERBOARD TAB */}
+            {rightSidebarTab === 'leaderboards' && (
               <motion.div
+                key="leaderboard-tab-content"
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 20 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="bg-slate-900 border border-slate-800 shadow-xl rounded-3xl p-5 space-y-4"
+              >
+                
+                {/* DYNAMIC LEADERBOARD INPUT AND CONGRATS */}
+                <AnimatePresence mode="popLayout">
+                  {gameMode === 'pvc' && winner === playerSymbol && (
+                    <motion.div
+                      initial={{ scale: 0.95, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      exit={{ scale: 0.95, opacity: 0 }}
+                      className="bg-gradient-to-r from-emerald-950/40 to-teal-950/40 p-4 rounded-2xl border border-emerald-500/30 relative overflow-hidden"
+                    >
+                      <div className="absolute right-2 -bottom-4 opacity-10 pointer-events-none">
+                        <Award className="w-24 h-24 text-emerald-400" />
+                      </div>
+                      
+                      <div className="flex items-center gap-2 text-emerald-400 mb-1">
+                        <Award className="w-5 h-5 text-amber-400 animate-bounce" />
+                        <h4 className="text-xs font-bold uppercase tracking-wider font-mono">Sensacional! Venceste a IA!</h4>
+                      </div>
+                      <p className="text-xs text-slate-300 leading-relaxed mb-3">
+                        Gostarias de submeter e eternizar o teu recorde de <span className="font-bold text-amber-400 font-mono">{humanMovesPlayed} jogadas</span> na base de dados pública na Internet?
+                      </p>
+
+                      {!hasSavedScore ? (
+                        <form onSubmit={handleScoreSubmit} className="space-y-2 relative z-10">
+                          <div className="flex gap-2">
+                            <input
+                              id="inp-player-name"
+                              type="text"
+                              maxLength={20}
+                              placeholder="Teu nome ou alcunha..."
+                              value={playerNameInput}
+                              onChange={(e) => setPlayerNameInput(e.target.value)}
+                              className="bg-slate-950 border border-slate-800 hover:border-slate-700 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs font-mono text-slate-100 flex-1 outline-none transition-all placeholder:text-slate-600"
+                            />
+                            <button
+                              id="btn-submeter-score"
+                              type="submit"
+                              disabled={submittingScore}
+                              className="bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-bold px-4 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-lg shadow-emerald-500/10"
+                            >
+                              {submittingScore ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Send className="w-3.5 h-3.5" />
+                              )}
+                              Registar
+                            </button>
+                          </div>
+                          {scoreError && (
+                            <p className="text-[10px] text-red-400 font-mono flex items-center gap-1">
+                              <AlertCircle className="w-3 h-3" /> {scoreError}
+                            </p>
+                          )}
+                        </form>
+                      ) : (
+                        <motion.div 
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          className="flex items-center gap-2 bg-slate-950/80 p-2.5 rounded-xl border border-emerald-500/30 text-emerald-400 text-xs font-semibold"
+                        >
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                          <span>Pontuação guardada com sucesso! Procura o teu nome abaixo.</span>
+                        </motion.div>
+                      )}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {/* TAB SECTION FOR EACH DIFFICULTY */}
+                <div>
+                  <div className="flex items-center justify-between mb-3.5">
+                    <div className="flex items-center gap-1.5">
+                      <ListOrdered className="w-4 h-4 text-emerald-400" />
+                      <span className="font-mono text-xs font-bold text-slate-300">TABELAS POR DIFICULDADE</span>
+                    </div>
+                    <span className="text-[9px] bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded-full font-mono uppercase font-bold">
+                      Base de Dados Ativa
+                    </span>
+                  </div>
+
+                  {/* Horizontal pill navigators for standings difficulty */}
+                  <div className="grid grid-cols-3 gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                    {(['easy', 'medium', 'hard'] as Difficulty[]).map((diff) => (
+                      <button
+                        key={diff}
+                        id={`tbl-diff-tab-${diff}`}
+                        onClick={() => setLeaderboardDiffTab(diff)}
+                        className={`py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                          leaderboardDiffTab === diff
+                            ? 'bg-slate-800 text-emerald-400 font-bold border border-emerald-800/20'
+                            : 'text-slate-400 hover:text-slate-300'
+                        }`}
+                      >
+                        {diff === 'easy' ? 'Fácil' : diff === 'medium' ? 'Médio' : 'Imbatível'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* SCORES LIST VIEW */}
+                <div className="space-y-2">
+                  <div className="bg-slate-950 p-1.5 rounded-2xl border border-slate-800/60 max-h-[340px] overflow-y-auto custom-scrollbar">
+                    {loadingScores ? (
+                      <div className="py-12 flex flex-col justify-center items-center text-slate-500 text-xs font-mono">
+                        <Loader2 className="w-6 h-6 text-emerald-400 animate-spin mb-2" />
+                        Carregando tabela mundial...
+                      </div>
+                    ) : getLeaderboardData(leaderboardDiffTab).length === 0 ? (
+                      <div className="py-12 flex flex-col justify-center items-center text-slate-500 text-center px-4">
+                        <Trophy className="w-8 h-8 text-slate-700 mb-2" />
+                        <p className="text-xs font-mono font-semibold">Nenhuma vitória registada!</p>
+                        <p className="text-[10px] text-slate-600 mt-1 max-w-[200px] mx-auto leading-relaxed">
+                          Sê o primeiro a vencer a IA nesta dificuldade e publica o teu nome!
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="space-y-1">
+                        {/* Header helper */}
+                        <div className="flex font-mono text-[9px] text-slate-500 px-2 py-1 uppercase tracking-wider justify-between border-b border-slate-900 mb-1">
+                          <div className="flex gap-4">
+                            <span>Pos</span>
+                            <span>Jogador</span>
+                          </div>
+                          <div className="flex gap-6">
+                            <span>Jogadas</span>
+                            <span>Data</span>
+                          </div>
+                        </div>
+
+                        {getLeaderboardData(leaderboardDiffTab).map((score, index) => {
+                          const isTop1 = index === 0;
+                          const isTop2 = index === 1;
+                          const isTop3 = index === 2;
+                          const formattedDate = new Date(score.timestamp).toLocaleDateString('pt-PT', { 
+                            day: 'numeric', 
+                            month: 'short' 
+                          });
+
+                          return (
+                            <div 
+                              key={score.id}
+                              className={`flex items-center justify-between p-2 rounded-xl transition-all ${
+                                isTop1 
+                                  ? 'bg-amber-500/10 border border-amber-500/20 text-amber-200' 
+                                  : isTop2 
+                                    ? 'bg-slate-300/5 border border-slate-400/20 text-slate-300' 
+                                    : isTop3 
+                                      ? 'bg-amber-700/10 border border-amber-700/20 text-amber-600'
+                                      : 'bg-slate-900/60 hover:bg-slate-900 border border-slate-800/10 text-slate-300'
+                              }`}
+                            >
+                              {/* Left side info (Rank and Name) */}
+                              <div className="flex items-center gap-3">
+                                <span className={`w-5 h-5 rounded-md flex items-center justify-center font-mono text-[11px] font-bold ${
+                                  isTop1 
+                                    ? 'bg-amber-400 text-slate-950 font-black' 
+                                    : isTop2 
+                                      ? 'bg-slate-400 text-slate-950' 
+                                      : isTop3 
+                                        ? 'bg-amber-700 text-slate-100' 
+                                        : 'text-slate-500'
+                                }`}>
+                                  {index + 1}
+                                </span>
+                                <span className="font-semibold text-xs truncate max-w-[120px] font-sans">
+                                  {score.playerName}
+                                </span>
+                              </div>
+
+                              {/* Right side info (Move counts and Date) */}
+                              <div className="flex items-center gap-4 font-mono text-xs">
+                                <div className="flex items-center gap-1 bg-slate-950/90 border border-slate-800/50 px-2 py-0.5 rounded-lg">
+                                  <ChevronRight className="w-3 h-3 text-emerald-400 shrink-0" />
+                                  <span className="font-bold text-emerald-400">{score.movesCount}</span>
+                                  <span className="text-[10px] text-slate-500">jogadas</span>
+                                </div>
+                                <span className="text-[10px] text-slate-500 shrink-0" title={new Date(score.timestamp).toLocaleTimeString()}>
+                                  {formattedDate}
+                                </span>
+                              </div>
+
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                  
+                  {/* FOOTER METADATA ABOUT WEB CONNECTION */}
+                  <div className="bg-slate-950 border border-slate-900 p-2.5 rounded-2xl flex items-center gap-2 text-[10px] text-slate-500 font-mono">
+                    <Globe className="w-3.5 h-3.5 text-indigo-400 shrink-0 animate-pulse" />
+                    <span>Esta folha é gerada dinamicamente através de pedidos GET/POST sincronizados em memória com o servidor na Internet.</span>
+                  </div>
+
+                </div>
+
+              </motion.div>
+            )}
+
+            {/* 2. REAL-TIME DATA STRUCTURE VISUALIZER TAB */}
+            {rightSidebarTab === 'visualizer' && (
+              <motion.div
+                key="visualizer-tab-content"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
                 className="bg-slate-900 border border-slate-800 shadow-xl rounded-3xl overflow-hidden flex flex-col h-full"
               >
                 {/* Visualizer header */}
                 <div className="bg-slate-950 border-b border-slate-800 p-4 flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <Database className="w-4 h-4 text-emerald-400 animate-pulse" />
+                    <Database className="w-4 h-4 text-cyan-400 animate-pulse" />
                     <span className="font-mono text-xs font-bold text-slate-200">INSPEÇÃO DE DATA STATE (3x3)</span>
                   </div>
-                  <span className="text-[9px] bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full font-mono uppercase font-bold">
+                  <span className="text-[9px] bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 px-2 py-0.5 rounded-full font-mono uppercase font-bold">
                     Tempo Real
                   </span>
                 </div>
 
                 {/* Info summary */}
                 <div className="p-4 border-b border-slate-800/80 bg-slate-950/20 text-xs text-slate-400 leading-relaxed">
-                  Conforme solicitado, abaixo está a correspondência exata do tabuleiro com a estrutura de dados em memória. Cada quadrado começa <span className="text-slate-300 font-semibold font-mono">vazio (null)</span> e é atualizado para <span className="text-cyan-400 font-mono font-semibold">"X"</span> ou <span className="text-rose-400 font-mono font-semibold">"O"</span> ao jogar.
+                  Abaixo está a correspondência do tabuleiro com a estrutura de dados em memória. Cada quadrado começa <span className="text-slate-300 font-semibold font-mono">null</span> e é atualizado para <span className="text-cyan-400 font-mono font-semibold">"X"</span> ou <span className="text-rose-400 font-mono font-semibold">"O"</span> ao jogar.
                 </div>
 
                 <div className="p-5 space-y-6 flex-1">
@@ -523,7 +871,6 @@ export default function App() {
                     </h4>
 
                     <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800/60 font-mono text-xs space-y-2 mt-2">
-                      {/* Row 1 */}
                       <div className="flex items-center justify-between border-b border-slate-900/60 pb-2">
                         <span className="text-slate-500 text-[10px]">Linha 1 (Índices 0,1,2):</span>
                         <div className="flex gap-1.5">
@@ -537,7 +884,6 @@ export default function App() {
                         </div>
                       </div>
 
-                      {/* Row 2 */}
                       <div className="flex items-center justify-between border-b border-slate-900/60 pb-2">
                         <span className="text-slate-500 text-[10px]">Linha 2 (Índices 3,4,5):</span>
                         <div className="flex gap-1.5">
@@ -551,7 +897,6 @@ export default function App() {
                         </div>
                       </div>
 
-                      {/* Row 3 */}
                       <div className="flex items-center justify-between">
                         <span className="text-slate-500 text-[10px]">Linha 3 (Índices 6,7,8):</span>
                         <div className="flex gap-1.5">
@@ -583,7 +928,7 @@ export default function App() {
                         <div className="h-full flex flex-col justify-center items-center text-slate-600 py-6 text-center">
                           <AlertCircle className="w-6 h-6 text-slate-700 mb-1" />
                           <p className="text-[11px] font-mono">Nenhum evento registado</p>
-                          <p className="text-[9px] text-slate-700 mt-0.5">Clica numa casa para iniciar</p>
+                          <p className="text-[9px] text-slate-705 mt-0.5">Clica numa casa para iniciar</p>
                         </div>
                       ) : (
                         <div className="space-y-1 p-1">
@@ -612,53 +957,10 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* WINNER CELEBRATION BOX inside sidebar */}
-                  <AnimatePresence>
-                    {(winner || isDraw) && (
-                      <motion.div
-                        initial={{ scale: 0.9, opacity: 0 }}
-                        animate={{ scale: 1, opacity: 1 }}
-                        exit={{ scale: 0.9, opacity: 0 }}
-                        className={`p-4 rounded-2xl border flex flex-col items-center text-center ${
-                          winner 
-                            ? 'bg-emerald-950/20 border-emerald-800 text-emerald-400' 
-                            : 'bg-slate-900 border-slate-700 text-slate-300'
-                        }`}
-                      >
-                        {winner ? (
-                          <>
-                            <Award className="w-8 h-8 text-amber-400 mb-2 animate-bounce" />
-                            <h4 className="text-sm font-bold uppercase tracking-wider font-mono">Partida Finalizada!</h4>
-                            <p className="text-xs text-slate-300 mt-1">
-                              O jogador <span className="font-extrabold text-amber-300">"{winner}"</span> é o grande vencedor!
-                            </p>
-                            <p className="text-[9px] text-slate-500 font-mono mt-1.5 uppercase">
-                              Linha vitoriosa: ({winningPattern?.join(', ')})
-                            </p>
-                          </>
-                        ) : (
-                          <>
-                            <Flame className="w-8 h-8 text-amber-500/80 mb-2" />
-                            <h4 className="text-sm font-bold uppercase tracking-wider font-mono">Empate Técnico!</h4>
-                            <p className="text-xs text-slate-300 mt-1">
-                              O tabuleiro de 3x3 foi completamente ocupado sem vencedores.
-                            </p>
-                          </>
-                        )}
-                        <button
-                          id="btn-visualizer-recomecar"
-                          onClick={handleResetRound}
-                          className="mt-3 bg-emerald-500 hover:bg-emerald-600 text-slate-950 text-[11px] font-bold px-4 py-1.5 rounded-xl uppercase tracking-wider transition-all shadow cursor-pointer shadow-emerald-500/10"
-                        >
-                          Jogar de novo
-                        </button>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-
                 </div>
               </motion.div>
             )}
+
           </AnimatePresence>
 
         </div>
@@ -668,7 +970,7 @@ export default function App() {
       {/* FOOTER */}
       <footer className="max-w-6xl mx-auto w-full text-center border-t border-slate-900/60 pt-4 mt-6">
         <p className="text-[10px] font-mono text-slate-600">
-          Criado em conformidade com as diretivas de representação de dados. Estado reativo sincronizado localmente.
+          Jogo do Galo Clássivo 3x3 e Base de Dados expressiva em memória local no servidor de Cloud Run.
         </p>
       </footer>
 
