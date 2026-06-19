@@ -83,6 +83,8 @@ export default function App() {
   const humanMovesPlayed = logs.filter(log => log.player === playerSymbol).length;
 
   const [copiedLogs, setCopiedLogs] = useState<boolean>(false);
+  const [drawCountdown, setDrawCountdown] = useState<number | null>(null);
+  const [isDrawResetPaused, setIsDrawResetPaused] = useState<boolean>(false);
 
   const handleCopyLogs = () => {
     if (logs.length === 0) return;
@@ -280,8 +282,41 @@ export default function App() {
     setHasSavedScore(false);
     setScoreError(null);
     setTurn('X');
+    setDrawCountdown(null);
+    setIsDrawResetPaused(false);
     if (audioEnabled) playSound('reset');
   };
+
+  // Auto-clear board on draw with countdown
+  useEffect(() => {
+    let countdownInterval: NodeJS.Timeout | null = null;
+
+    if (isDraw && !isDrawResetPaused) {
+      if (drawCountdown === null) {
+        setDrawCountdown(5); // 5-second countdown to read/copy summary
+      } else if (drawCountdown > 0) {
+        countdownInterval = setInterval(() => {
+          setDrawCountdown(prev => {
+            if (prev !== null && prev > 1) {
+              return prev - 1;
+            }
+            return 0;
+          });
+        }, 1000);
+      } else if (drawCountdown === 0) {
+        handleResetRound();
+      }
+    } else {
+      if (!isDraw) {
+        setDrawCountdown(null);
+        setIsDrawResetPaused(false);
+      }
+    }
+
+    return () => {
+      if (countdownInterval) clearInterval(countdownInterval);
+    };
+  }, [isDraw, drawCountdown, isDrawResetPaused]);
 
   // Reset full game with scores
   const handleZerarScores = () => {
@@ -462,10 +497,10 @@ export default function App() {
 
           {/* ACTIVE TURN & STATUS DISPLAY / OUTCOME CARD */}
           {winner || isDraw ? (
-            <div className={`w-full flex items-center justify-between gap-3 p-3 rounded-2xl border ${
+            <div className={`w-full flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-2xl border ${
               winner 
                 ? (winner === 'X' ? 'bg-cyan-500/5 border-cyan-500/20 text-cyan-300' : 'bg-rose-500/5 border-rose-500/20 text-rose-300')
-                : 'bg-slate-900 border-slate-800 text-slate-300'
+                : 'bg-amber-500/5 border-amber-500/20 text-amber-200'
             }`}>
               <div className="flex items-center gap-2">
                 {winner ? (
@@ -484,33 +519,76 @@ export default function App() {
                     </div>
                   </>
                 ) : (
-                  <>
-                    <AlertCircle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                    <span className="text-xs font-bold text-slate-200">Empate Técnico! <span className="font-normal text-slate-400">({logs.length} jogadas)</span></span>
-                  </>
+                  <div className="flex flex-col gap-0.5 text-left">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-slate-200">
+                      <AlertCircle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                      <span>Empate Técnico! ({logs.length} jogadas)</span>
+                    </div>
+                    {drawCountdown !== null && (
+                      <span className="text-[10px] font-mono text-amber-400/90 animate-pulse">
+                        {isDrawResetPaused 
+                          ? '⏸ Limpeza automática parada' 
+                          : `🧹 Limpando tabuleiro em ${drawCountdown}s...`
+                        }
+                      </span>
+                    )}
+                  </div>
                 )}
               </div>
               
-              <button
-                id="btn-copy-summary-outcome"
-                onClick={handleCopyLogs}
-                className={`flex items-center gap-1 text-[10px] uppercase font-mono tracking-wider font-semibold px-2 py-1 rounded-lg border transition-all cursor-pointer ${
-                  copiedLogs
-                    ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-400 shadow-sm'
-                    : 'bg-slate-950 border-slate-800 hover:bg-slate-900 text-slate-300 hover:text-white'
-                }`}
-                title="Copiar resumo de jogadas"
-              >
-                {copiedLogs ? (
-                  <>
-                    <Check className="w-3 h-3 text-emerald-400" /> Copiado!
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3 h-3" /> Copiar resumo
-                  </>
+              <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                <button
+                  id="btn-copy-summary-outcome"
+                  onClick={handleCopyLogs}
+                  className={`flex items-center gap-1 text-[10px] uppercase font-mono tracking-wider font-semibold px-2 py-1 rounded-lg border transition-all cursor-pointer ${
+                    copiedLogs
+                      ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-400 shadow-sm'
+                      : 'bg-slate-950 border-slate-800 hover:bg-slate-900 text-slate-300 hover:text-white'
+                  }`}
+                  title="Copiar resumo de jogadas"
+                >
+                  {copiedLogs ? (
+                    <>
+                      <Check className="w-3 h-3 text-emerald-400" /> Copiado!
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3 h-3" /> Copiar resumo
+                    </>
+                  )}
+                </button>
+
+                {isDraw && drawCountdown !== null && (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      id="btn-pause-resume-draw"
+                      onClick={() => setIsDrawResetPaused(!isDrawResetPaused)}
+                      className="flex items-center justify-center px-2 py-1 bg-slate-950 hover:bg-slate-900 border border-slate-800 rounded-lg text-slate-400 hover:text-slate-200 transition-all text-[10px] font-mono cursor-pointer"
+                      title={isDrawResetPaused ? "Retomar temporizador" : "Pausar temporizador"}
+                    >
+                      {isDrawResetPaused ? "▶ Retomar" : "⏸ Pausar"}
+                    </button>
+                    <button
+                      id="btn-instant-draw-clear"
+                      onClick={handleResetRound}
+                      className="flex items-center justify-center px-2 py-1 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 border border-amber-500/30 rounded-lg text-[10px] font-bold transition-all cursor-pointer"
+                      title="Limpar tabuleiro agora"
+                    >
+                      Limpar já
+                    </button>
+                  </div>
                 )}
-              </button>
+
+                {winner && (
+                  <button
+                    id="btn-winner-clear"
+                    onClick={handleResetRound}
+                    className="flex items-center justify-center px-2.5 py-1 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/30 rounded-lg text-[10px] font-bold transition-all cursor-pointer"
+                  >
+                    Jogar Novamente
+                  </button>
+                )}
+              </div>
             </div>
           ) : (
             <div className="w-full flex items-center justify-between px-2">
